@@ -14,11 +14,10 @@ blessed does all the terminal rendering, styling, and input.
     python3 sysmon.py [--refresh SECONDS]
 
 Keys while running:
-    c        sort processes by CPU%
-    m        sort processes by memory%
-    p        sort processes by PID
-    + / -    speed up / slow down the refresh rate
-    q        quit
+    c / m / p / u / n   sort processes by CPU% / memory% / PID / user / command
+    (or just click a column header in the process table -- same effect)
+    + / -               speed up / slow down the refresh rate
+    q                   quit
 """
 
 import argparse
@@ -224,13 +223,42 @@ def build_disk():
     return lines
 
 
+# sort key -> comparator; also doubles as the whitelist of clickable/sortable columns
+SORT_SPECS = {
+    'pid':  lambda r: r['pid'],
+    'user': lambda r: r['user'].lower(),
+    'cpu':  lambda r: -r['cpu'],
+    'mem':  lambda r: -r['mem'],
+    'name': lambda r: r['name'].lower(),
+}
+
+
 def build_procs(rows, sort_key, max_rows):
-    keyfunc = {'cpu': lambda r: -r['cpu'], 'mem': lambda r: -r['mem'], 'pid': lambda r: r['pid']}[sort_key]
-    rows = sorted(rows, key=keyfunc)
+    rows = sorted(rows, key=SORT_SPECS[sort_key])
 
     fixed_w = 6 + 1 + 10 + 1 + 7 + 1 + 7 + 1 + 1 + 1
     name_w = max(10, term.width - fixed_w)
-    header = f'{"PID":>6} {"USER":<10} {"CPU%":>7} {"MEM%":>7} S {"COMMAND":<{name_w}}'
+
+    # (sort key or None, title, width, alignment) -- one source of truth for
+    # both the header text and the x-ranges mouse clicks are tested against,
+    # so the two can never drift out of sync.
+    columns = [
+        ('pid', 'PID', 6, '>'),
+        ('user', 'USER', 10, '<'),
+        ('cpu', 'CPU%', 7, '>'),
+        ('mem', 'MEM%', 7, '>'),
+        (None, 'S', 1, '<'),
+        ('name', 'COMMAND', name_w, '<'),
+    ]
+
+    header_cells, col_ranges, x = [], {}, 0
+    for key, title, width, align in columns:
+        header_cells.append(f'{title:{align}{width}}')
+        if key:
+            col_ranges[key] = (x, x + width)
+        x += width + 1  # +1 for the single-space separator between columns
+
+    header = ' '.join(header_cells)
     lines = [term.bold('Processes') + term.dim(f'  ({len(rows)} total, sorted by {sort_key})'),
              term.reverse(header[:term.width])]
 
@@ -244,11 +272,11 @@ def build_procs(rows, sort_key, max_rows):
     hidden = len(rows) - len(shown)
     if hidden > 0:
         lines.append(term.dim(f'  ... and {hidden} more not shown (shrink the process list or grow your terminal)'))
-    return lines
+    return lines, col_ranges
 
 
 def build_footer(sort_key, refresh):
-    hint = (f"[q]uit  [c]pu-sort  [m]em-sort  [p]id-sort  [+/-]speed"
+    hint = (f"[q]uit  click/[c/m/p/u/n] a column to sort  [+/-]speed"
             f"   sort={sort_key}  refresh={refresh:.1f}s")
     return [term.reverse(hint[:term.width].ljust(term.width))]
 
@@ -282,7 +310,11 @@ def main():
     psutil.cpu_percent(percpu=True)  # prime the global counters too
     prev_net, prev_time = None, None
 
-    with term.fullscreen(), term.hidden_cursor(), term.cbreak():
+    # mouse_enabled() does a one-time terminal capability query (same cost
+    # does_mouse() would pay), so just enable it directly -- on a terminal
+    # that doesn't support mouse reporting this is a harmless no-op and the
+    # keyboard shortcuts still work.
+    with term.fullscreen(), term.hidden_cursor(), term.cbreak(), term.mouse_enabled():
         while True:
             percpu = psutil.cpu_percent(percpu=True)
 
@@ -311,20 +343,26 @@ def main():
 
             used_so_far = len(lines) + 3  # + process header/subheader + footer
             remaining = max(3, term.height - used_so_far)
-            lines += build_procs(proc_rows, sort_key, remaining)
+            proc_section_y = len(lines)
+            proc_lines, col_ranges = build_procs(proc_rows, sort_key, remaining)
+            lines += proc_lines
+            header_y = proc_section_y + 1  # the reversed column-header row
             lines += build_footer(sort_key, refresh)
 
             render(lines)
 
             key = term.inkey(timeout=refresh)
-            if key == 'q':
+            if key.name == 'MOUSE_LEFT':
+                click_y, click_x = key.mouse_yx
+                if click_y == header_y:
+                    for col_key, (x0, x1) in col_ranges.items():
+                        if x0 <= click_x < x1:
+                            sort_key = col_key
+                            break
+            elif key == 'q':
                 break
-            elif key.lower() == 'c':
-                sort_key = 'cpu'
-            elif key.lower() == 'm':
-                sort_key = 'mem'
-            elif key.lower() == 'p':
-                sort_key = 'pid'
+            elif key.lower() in ('c', 'm', 'p', 'u', 'n'):
+                sort_key = {'c': 'cpu', 'm': 'mem', 'p': 'pid', 'u': 'user', 'n': 'name'}[key.lower()]
             elif key in ('+', '='):
                 refresh = max(0.2, refresh - 0.2)
             elif key == '-':
