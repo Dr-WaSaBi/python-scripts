@@ -64,12 +64,33 @@ def safe(func, default='?'):
         return default
 
 
+# eighths of a block, for sub-character bar resolution -- 1/8 through 7/8
+# (8/8 is just a plain full block, no glyph needed for that one)
+EIGHTHS = ('▏', '▎', '▍', '▌', '▋', '▊', '▉')
+
+
 def bar(pct, width):
-    """A blessed-colored usage bar, green -> yellow -> red as pct climbs."""
+    """A blessed-colored usage bar, green -> yellow -> red as pct climbs.
+
+    Real-world load is usually either near-idle or near-maxed, and a
+    plain linear 0-100 scale makes anything under ~10% vanish into an
+    all-empty bar on a modest-width meter. So the *fill* uses a sqrt
+    curve to stretch out the low end (100% still fills it completely),
+    while the color thresholds and the printed percentage stay tied to
+    the real, unscaled value -- only the bar's shape is exaggerated,
+    never the number next to it.
+    """
     pct = max(0.0, min(100.0, pct))
-    filled = int(width * pct / 100)
+    fraction = (pct / 100) ** 0.5
+    eighths_total = round(width * 8 * fraction)
+    full, remainder = divmod(eighths_total, 8)
+    full = min(full, width)
+    filled = '█' * full
+    if remainder and full < width:
+        filled += EIGHTHS[remainder - 1]
+        full += 1
     color = term.green if pct < 70 else term.yellow if pct < 90 else term.red
-    return color('█' * filled) + term.dim('░' * (width - filled))
+    return color(filled) + term.dim('░' * (width - full))
 
 
 # ── data collection ──────────────────────────────────────────────────────────
