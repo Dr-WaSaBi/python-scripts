@@ -9,9 +9,12 @@ and term.height are just live properties, not something you snapshot
 once and hope stays true. 📡
 
 Requires psutil (`pip install psutil`) for the system/process data;
-blessed does all the terminal rendering, styling, and input.
+blessed does all the terminal rendering, styling, and input. Works on
+Linux, macOS, and Windows 10+ (Windows Terminal recommended for full
+color/mouse support).
 
-    python3 sysmon.py [--refresh SECONDS]
+    python3 sysmon.py [--refresh SECONDS]      (Linux/macOS)
+    python sysmon.py [--refresh SECONDS]       (Windows)
 
 Keys while running:
     c / m / p / u / n   sort processes by CPU% / memory% / PID / user / command
@@ -21,6 +24,7 @@ Keys while running:
 """
 
 import argparse
+import os
 import platform
 import time
 
@@ -61,6 +65,12 @@ def safe(func, default='?'):
         return func()
     except (psutil.Error, OSError):
         return default
+
+
+def short_username(name):
+    """Windows returns 'DOMAIN\\user' -- keep just the account name so it
+    fits the column; a no-op on POSIX names (no backslash present)."""
+    return name.rsplit('\\', 1)[-1]
 
 
 # eighths of a block, for sub-character bar resolution -- 1/8 through 7/8
@@ -124,7 +134,7 @@ class ProcTracker:
                     cpu = 0.0 if freshly_seen else proc.cpu_percent(None)
                     rows.append({
                         'pid': pid,
-                        'user': safe(proc.username, '?')[:10],
+                        'user': short_username(safe(proc.username, '?'))[:10],
                         'cpu': cpu,
                         'mem': safe(proc.memory_percent, 0.0),
                         'status': safe(proc.status, '?')[:1].upper(),
@@ -142,7 +152,10 @@ def build_header():
     uptime = fmt_uptime(time.time() - psutil.boot_time())
     now = time.strftime('%Y-%m-%d %H:%M:%S')
     try:
-        load1, load5, load15 = (x for x in __import__('os').getloadavg())
+        # psutil emulates getloadavg() on platforms without a native one
+        # (Windows, macOS) via a background sample, so this works cross-
+        # platform instead of just falling back to 'n/a' off of Linux.
+        load1, load5, load15 = psutil.getloadavg()
         load = f'{load1:.2f} {load5:.2f} {load15:.2f}'
     except (AttributeError, OSError):
         load = 'n/a'
@@ -205,12 +218,22 @@ def build_net(rates):
     return lines
 
 
+def _is_local_disk(part):
+    """psutil already excludes empty-media/virtual drives on Windows via
+    disk_partitions(all=False), so accept everything there; on POSIX we
+    still want to filter out virtual/pseudo mounts (tmpfs, overlay, etc.)
+    that don't correspond to a real block device."""
+    if os.name != 'posix':
+        return True
+    return part.device.startswith('/dev/')
+
+
 def build_disk():
     lines = [term.bold('Disks')]
     seen_mounts = set()
     width = min(40, term.width - 34)
     for part in psutil.disk_partitions():
-        if not part.device.startswith('/dev/') or part.mountpoint in seen_mounts:
+        if not _is_local_disk(part) or part.mountpoint in seen_mounts:
             continue
         seen_mounts.add(part.mountpoint)
         usage = safe(lambda: psutil.disk_usage(part.mountpoint), None)
