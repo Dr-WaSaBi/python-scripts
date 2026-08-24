@@ -44,3 +44,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Per-machine "dependencies already verified" markers (see sysmon.py etc.)
+.*_deps_ok

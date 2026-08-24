@@ -32,9 +32,16 @@ import time
 # ── dependency check ─────────────────────────────────────────────────────────
 # A fresh checkout on a new machine (looking at you, Windows) won't have
 # these installed yet, so check first and pip-install anything missing
-# instead of just dying on the import with a cryptic traceback.
+# instead of just dying on the import with a cryptic traceback. Checking
+# importability isn't free -- especially over a slow/networked path like a
+# WSL UNC share -- so once everything's confirmed present we drop a flag
+# file next to the script and skip the check entirely on later runs. The
+# flag records *which* packages it verified, so adding a new required
+# package later automatically invalidates a stale flag instead of silently
+# skipping the check for something that was never actually confirmed.
 
 REQUIRED_PACKAGES = ('psutil', 'blessed')
+_DEPS_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.sysmon_deps_ok')
 
 
 def _is_importable(name):
@@ -46,23 +53,35 @@ def _is_importable(name):
 
 
 def _ensure_dependencies():
+    flag_contents = ','.join(REQUIRED_PACKAGES)
+    try:
+        with open(_DEPS_FLAG, encoding='utf-8') as f:
+            if f.read().strip() == flag_contents:
+                return  # verified on a previous run -- trust it and skip
+    except OSError:
+        pass
+
     missing = [pkg for pkg in REQUIRED_PACKAGES if not _is_importable(pkg)]
-    if not missing:
-        return
+    if missing:
+        print(f"Missing dependencies: {', '.join(missing)} -- installing...")
+        base_cmd = [sys.executable, '-m', 'pip', 'install']
+        result = subprocess.run(base_cmd + missing)
+        if result.returncode != 0:
+            # Some distros (Debian/Ubuntu's PEP 668 "externally managed"
+            # guard) refuse a bare system-wide install and want --user
+            # instead; give that one retry before giving up.
+            result = subprocess.run(base_cmd + ['--user'] + missing)
 
-    print(f"Missing dependencies: {', '.join(missing)} -- installing...")
-    base_cmd = [sys.executable, '-m', 'pip', 'install']
-    result = subprocess.run(base_cmd + missing)
-    if result.returncode != 0:
-        # Some distros (Debian/Ubuntu's PEP 668 "externally managed" guard)
-        # refuse a bare system-wide install and want --user instead; give
-        # that one retry before giving up.
-        result = subprocess.run(base_cmd + ['--user'] + missing)
+        if result.returncode != 0 or any(not _is_importable(pkg) for pkg in missing):
+            print("\nAutomatic install didn't work. Please install manually:\n"
+                  f"    {sys.executable} -m pip install {' '.join(missing)}")
+            sys.exit(1)
 
-    if result.returncode != 0 or any(not _is_importable(pkg) for pkg in missing):
-        print("\nAutomatic install didn't work. Please install manually:\n"
-              f"    {sys.executable} -m pip install {' '.join(missing)}")
-        sys.exit(1)
+    try:
+        with open(_DEPS_FLAG, 'w', encoding='utf-8') as f:
+            f.write(flag_contents)
+    except OSError:
+        pass  # no write access next to the script -- fine, just re-check next time
 
 
 _ensure_dependencies()

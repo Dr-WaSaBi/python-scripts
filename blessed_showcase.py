@@ -15,6 +15,7 @@ Needs the `blessed` package -- missing it gets auto-installed on first run.
 """
 
 import itertools
+import os
 import subprocess
 import sys
 import time
@@ -22,23 +23,46 @@ import time
 # ── dependency check ─────────────────────────────────────────────────────────
 # A fresh checkout on a new machine won't have blessed installed yet, so
 # check first and pip-install it instead of just dying on the import with
-# a cryptic traceback.
+# a cryptic traceback. Checking importability isn't free -- especially over
+# a slow/networked path like a WSL UNC share -- so once confirmed we drop a
+# flag file next to the script and skip the check on later runs.
 
-try:
-    import blessed  # noqa: F401
-except ImportError:
-    print("Missing dependency: blessed -- installing...")
-    base_cmd = [sys.executable, '-m', 'pip', 'install']
-    result = subprocess.run(base_cmd + ['blessed'])
-    if result.returncode != 0:
-        # Some distros (Debian/Ubuntu's PEP 668 "externally managed" guard)
-        # refuse a bare system-wide install and want --user instead; give
-        # that one retry before giving up.
-        result = subprocess.run(base_cmd + ['--user', 'blessed'])
-    if result.returncode != 0:
-        print("\nAutomatic install didn't work. Please install manually:\n"
-              f"    {sys.executable} -m pip install blessed")
-        sys.exit(1)
+_DEPS_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.blessed_showcase_deps_ok')
+
+
+def _is_importable(name):
+    try:
+        __import__(name)
+        return True
+    except ImportError:
+        return False
+
+
+def _ensure_dependencies():
+    if os.path.exists(_DEPS_FLAG):
+        return  # verified on a previous run -- trust it and skip
+
+    if not _is_importable('blessed'):
+        print("Missing dependency: blessed -- installing...")
+        base_cmd = [sys.executable, '-m', 'pip', 'install']
+        result = subprocess.run(base_cmd + ['blessed'])
+        if result.returncode != 0:
+            # Some distros (Debian/Ubuntu's PEP 668 "externally managed"
+            # guard) refuse a bare system-wide install and want --user
+            # instead; give that one retry before giving up.
+            result = subprocess.run(base_cmd + ['--user', 'blessed'])
+        if result.returncode != 0 or not _is_importable('blessed'):
+            print("\nAutomatic install didn't work. Please install manually:\n"
+                  f"    {sys.executable} -m pip install blessed")
+            sys.exit(1)
+
+    try:
+        open(_DEPS_FLAG, 'w', encoding='utf-8').close()
+    except OSError:
+        pass  # no write access next to the script -- fine, just re-check next time
+
+
+_ensure_dependencies()
 
 from blessed import Terminal
 
