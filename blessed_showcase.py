@@ -11,10 +11,34 @@ polite refusal, blessed is way too classy to spew escape codes at a file.
     python3 blessed_showcase.py
 
 Pick a demo from the menu with its number, or 'q' to quit at any time.
+Needs the `blessed` package -- missing it gets auto-installed on first run.
 """
 
 import itertools
+import subprocess
+import sys
 import time
+
+# ── dependency check ─────────────────────────────────────────────────────────
+# A fresh checkout on a new machine won't have blessed installed yet, so
+# check first and pip-install it instead of just dying on the import with
+# a cryptic traceback.
+
+try:
+    import blessed  # noqa: F401
+except ImportError:
+    print("Missing dependency: blessed -- installing...")
+    base_cmd = [sys.executable, '-m', 'pip', 'install']
+    result = subprocess.run(base_cmd + ['blessed'])
+    if result.returncode != 0:
+        # Some distros (Debian/Ubuntu's PEP 668 "externally managed" guard)
+        # refuse a bare system-wide install and want --user instead; give
+        # that one retry before giving up.
+        result = subprocess.run(base_cmd + ['--user', 'blessed'])
+    if result.returncode != 0:
+        print("\nAutomatic install didn't work. Please install manually:\n"
+              f"    {sys.executable} -m pip install blessed")
+        sys.exit(1)
 
 from blessed import Terminal
 

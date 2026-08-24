@@ -8,10 +8,9 @@ automatically if you resize the terminal, because blessed's term.width
 and term.height are just live properties, not something you snapshot
 once and hope stays true. 📡
 
-Requires psutil (`pip install psutil`) for the system/process data;
-blessed does all the terminal rendering, styling, and input. Works on
-Linux, macOS, and Windows 10+ (Windows Terminal recommended for full
-color/mouse support).
+Needs psutil and blessed -- missing either one gets auto-installed on
+first run, so a fresh checkout just works. Runs on Linux, macOS, and
+Windows 10+ (Windows Terminal recommended for full color/mouse support).
 
     python3 sysmon.py [--refresh SECONDS]      (Linux/macOS)
     python sysmon.py [--refresh SECONDS]       (Windows)
@@ -26,7 +25,47 @@ Keys while running:
 import argparse
 import os
 import platform
+import subprocess
+import sys
 import time
+
+# ── dependency check ─────────────────────────────────────────────────────────
+# A fresh checkout on a new machine (looking at you, Windows) won't have
+# these installed yet, so check first and pip-install anything missing
+# instead of just dying on the import with a cryptic traceback.
+
+REQUIRED_PACKAGES = ('psutil', 'blessed')
+
+
+def _is_importable(name):
+    try:
+        __import__(name)
+        return True
+    except ImportError:
+        return False
+
+
+def _ensure_dependencies():
+    missing = [pkg for pkg in REQUIRED_PACKAGES if not _is_importable(pkg)]
+    if not missing:
+        return
+
+    print(f"Missing dependencies: {', '.join(missing)} -- installing...")
+    base_cmd = [sys.executable, '-m', 'pip', 'install']
+    result = subprocess.run(base_cmd + missing)
+    if result.returncode != 0:
+        # Some distros (Debian/Ubuntu's PEP 668 "externally managed" guard)
+        # refuse a bare system-wide install and want --user instead; give
+        # that one retry before giving up.
+        result = subprocess.run(base_cmd + ['--user'] + missing)
+
+    if result.returncode != 0 or any(not _is_importable(pkg) for pkg in missing):
+        print("\nAutomatic install didn't work. Please install manually:\n"
+              f"    {sys.executable} -m pip install {' '.join(missing)}")
+        sys.exit(1)
+
+
+_ensure_dependencies()
 
 import psutil
 from blessed import Terminal
